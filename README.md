@@ -1,12 +1,16 @@
 # ebus-mdns-discovery
 
-`mdns-discovery` browses the local network for DNS-SD/mDNS services and publishes each one it finds as a **retained MQTT record** on the local broker, so any service on the LAN can look up "what is on the network, and how do I reach it" by subscribing instead of browsing itself.
+`mdns-discovery` browses the local network for DNS-SD/mDNS services and publishes each one it finds as a **retained MQTT record** on the configured broker, so any service on the LAN can look up "what is on the network, and how do I reach it" by subscribing instead of browsing itself.
 
 It is the **browse-and-publish** side of discovery. The record model, its JSON Schema, the topic layout, tombstone/freshness semantics, a live-view `ServiceResolver`, and the `service-discovery` debug CLI all live in the companion library [`ebus-service-discovery`](https://github.com/electrification-bus/python-service-discovery) ([PyPI](https://pypi.org/project/ebus-service-discovery/)). That repo's README is the normative description of the wire contract; this package is only the publisher that produces those records.
 
 Each discovered service instance becomes one retained record at `{base}/{service_type}/{interface}/{percent_encoded_instance}`, where `{base}` defaults to `local/mdns/discovery/v1`. Addresses are carried raw; scope/APIPA/reachability classification is derived client-side by the library, so consumers get correct IPv4/IPv6 reachability handling for free.
 
-## How it works
+## Discovery backends
+
+The publisher is built around a `DiscoveryBackend` seam: a backend browses the LAN and produces the observations the rest of the service turns into records. **avahi** is the only backend today (`AvahiBrowser`), selected by default (`MDNSD_BACKEND=avahi`); its D-Bus dependencies are the optional `avahi` extra. The seam leaves room for a pure-Python `zeroconf` backend (cross-platform dev, no system daemon) as a contained addition rather than a fork. The rest of the pipeline (the record model, the bounded registry, the `$state` liveness) is backend-agnostic.
+
+## How the avahi backend works
 
 Event-driven, on a GLib main loop, reacting to avahi's D-Bus signals:
 
@@ -58,26 +62,9 @@ Config is a single typed contract loaded with precedence `defaults < optional TO
 | `MDNSD_TOPIC_BASE` | `local/mdns/discovery/v1` | retained-topic root, including the contract-version segment |
 | `MDNSD_BACKEND` | `avahi` | discovery backend (only `avahi` today) |
 
-### Network interfaces in and out of scope
-
-By default every interface avahi reports is published. To scope it, following the avahi model (deny wins, an empty allow-list means "all"):
-
-```bash
-MDNSD_ALLOW_INTERFACES=eth0,eth1          # publish only these
-MDNSD_DENY_INTERFACES=wlan0_ap            # publish everything except this
-MDNSD_ALLOW_INTERFACES="eth*,en*"         # globs (default on); exclude container churn:
-MDNSD_DENY_INTERFACES="veth*,docker*,br-*"
-```
-
-Set `MDNSD_INTERFACE_GLOB=false` to require exact interface names. Names match the OS interface name (the same string used as the topic's `{interface}` segment).
-
-### Tuning
-
-`MDNSD_TTL_SECONDS` (unset), `MDNSD_TOMBSTONE_LINGER_SECONDS` (900), `MDNSD_MAX_RECORDS` (512), `MDNSD_GC_SWEEP_INTERVAL_SECONDS` (60), `MDNSD_STARTUP_CLEAR_QUIET_SECONDS` (0.3), `MDNSD_STARTUP_CLEAR_MAX_SECONDS` (5.0), `MDNSD_BROWSE_SETTLE_QUIET_SECONDS` (2.0), `MDNSD_BROWSE_SETTLE_MAX_SECONDS` (10.0), `MDNSD_STATE_REASSERT_SECONDS` (120), `MDNSD_AVAHI_WATCHDOG_SECONDS` (60), `MDNSD_MAX_RESOLVERS` (512), `MDNSD_RESOLVER_EVICT_LOG_EVERY` (100), `MDNSD_LOG_LEVEL` (INFO).
-
 ### Config file
 
-Point at a TOML file with `MDNSD_CONFIG` or `--config` (default `/etc/mdns-discovery/config.toml`):
+Every setting can also come from a TOML file, pointed at by `MDNSD_CONFIG` or `--config` (default `/etc/mdns-discovery/config.toml`). The file is optional; environment variables override it, and CLI flags override both.
 
 ```toml
 [mqtt]
@@ -96,11 +83,38 @@ glob  = true
 max_records = 512
 ```
 
-Environment variables override the file; CLI flags override both.
+### Network interfaces in and out of scope
 
-## Discovery backends
+By default every interface avahi reports is published. To scope it, following the avahi model (deny wins, an empty allow-list means "all"):
 
-The publisher is built around a `DiscoveryBackend` seam. avahi is the only backend today (`AvahiBrowser`), and its D-Bus dependencies are the optional `avahi` extra. The seam leaves room for a pure-Python `zeroconf` backend (cross-platform dev, no system daemon) as a contained addition rather than a fork.
+```bash
+MDNSD_ALLOW_INTERFACES=eth0,eth1          # publish only these
+MDNSD_DENY_INTERFACES=wlan0_ap            # publish everything except this
+MDNSD_ALLOW_INTERFACES="eth*,en*"         # globs (default on); exclude container churn:
+MDNSD_DENY_INTERFACES="veth*,docker*,br-*"
+```
+
+Set `MDNSD_INTERFACE_GLOB=false` to require exact interface names. Names match the OS interface name (the same string used as the topic's `{interface}` segment).
+
+### Tuning
+
+Every knob has a working default; override only what you need.
+
+| Env | Default | Purpose |
+|---|---|---|
+| `MDNSD_TTL_SECONDS` | unset | optional per-record ttl; unset because freshness is bus-level via `$state` |
+| `MDNSD_TOMBSTONE_LINGER_SECONDS` | `900` | how long a tombstone lingers before its retained topic is cleared |
+| `MDNSD_MAX_RECORDS` | `512` | hard LRU cap on tracked records (bounds the keyspace) |
+| `MDNSD_GC_SWEEP_INTERVAL_SECONDS` | `60` | max wall time between GC sweeps |
+| `MDNSD_STARTUP_CLEAR_QUIET_SECONDS` | `0.3` | end the startup retained-tree drain once idle this long |
+| `MDNSD_STARTUP_CLEAR_MAX_SECONDS` | `5.0` | hard cap on the startup drain |
+| `MDNSD_BROWSE_SETTLE_QUIET_SECONDS` | `2.0` | publish `$state=ready` once the browse burst is idle this long |
+| `MDNSD_BROWSE_SETTLE_MAX_SECONDS` | `10.0` | hard cap before `$state=ready` fires anyway |
+| `MDNSD_STATE_REASSERT_SECONDS` | `120` | re-assert `ready` this long after settling (beats a late `lost` will) |
+| `MDNSD_AVAHI_WATCHDOG_SECONDS` | `60` | how often to probe avahi liveness |
+| `MDNSD_MAX_RESOLVERS` | `512` | concurrent avahi resolver LRU cap |
+| `MDNSD_RESOLVER_EVICT_LOG_EVERY` | `100` | sample rate for the resolver-cap-evict warning |
+| `MDNSD_LOG_LEVEL` | `INFO` | log level |
 
 ## Layout
 
@@ -108,9 +122,9 @@ The publisher is built around a `DiscoveryBackend` seam. avahi is the only backe
 |---|---|
 | `src/ebus_mdns_discovery/service.py` | the GLib main loop, avahi reconnect handling, MQTT lifecycle, and config |
 | `src/ebus_mdns_discovery/config.py` | the typed `Config` dataclass and the layered loader |
+| `src/ebus_mdns_discovery/backend.py` | the `DiscoveryBackend` protocol |
 | `src/ebus_mdns_discovery/browser.py` | the avahi D-Bus browse (`AvahiBrowser`) + the pure `InstanceTracker` address aggregation |
 | `src/ebus_mdns_discovery/registry.py` | the memory-bounded lifecycle: active/tombstone/clear/evict, LRU cap, GC sweep |
-| `src/ebus_mdns_discovery/backend.py` | the `DiscoveryBackend` protocol |
 
 ## Tests
 

@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/ebus-mdns-discovery.svg)](https://pypi.org/project/ebus-mdns-discovery/)
 [![Python versions](https://img.shields.io/pypi/pyversions/ebus-mdns-discovery.svg)](https://pypi.org/project/ebus-mdns-discovery/)
-[![Lint](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/lint.yml/badge.svg)](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/lint.yml)
+[![CI](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/ci.yml/badge.svg)](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

@@ -133,4 +133,33 @@ pip install -e ".[dev]"
 python -m pytest tests/ -q
 ```
 
-The suite is offline and mock-based (fake avahi/dbus objects); the live D-Bus/GLib browse is validated on a real device. Requires Python 3.10+.
+The suite is offline and mock-based (fake avahi/dbus objects); the live D-Bus/GLib browse is validated on a real device.
+
+## Requirements
+
+- **Python 3.10+** (the package and its dependencies use 3.10 language features).
+- [`ebus-service-discovery`](https://pypi.org/project/ebus-service-discovery/) and [`ebus-mqtt-client`](https://pypi.org/project/ebus-mqtt-client/) (installed automatically).
+- An MQTT broker to publish to (`MDNSD_MQTT_HOST`).
+- For the avahi backend (the `avahi` extra): the D-Bus binding and PyGObject, and a running `avahi-daemon`. In an OS image these are usually the system `python3-dbus` / `python3-pygobject` packages rather than the wheels.
+
+## Releases
+
+Released versions are published to [PyPI](https://pypi.org/project/ebus-mdns-discovery/); each is tagged `vX.Y.Z` in this repository and described in [CHANGELOG.md](CHANGELOG.md). The project follows [Semantic Versioning](https://semver.org/).
+
+## Releasing
+
+The version lives in exactly one place: `__version__` in `src/ebus_mdns_discovery/__init__.py`. `pyproject.toml` reads it dynamically, the `setup.py` legacy shim reads it by regex, and the publish workflow refuses to release a tag that disagrees with it. To cut a release:
+
+1. Bump `__version__` in `src/ebus_mdns_discovery/__init__.py` (the only place).
+2. Move the CHANGELOG's `[Unreleased]` entries under a new version heading.
+3. Commit, then tag it `v`-prefixed to match: `git tag vX.Y.Z && git push --tags` (a plain `git push` does not trigger a release).
+
+Pushing a `v*` tag runs the publish workflow, which verifies the tag equals `v$__version__`, builds the sdist and wheel, and publishes to PyPI via Trusted Publishing (OIDC, no stored token).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for Discussions, Issues, and pull requests. The daemon is intentionally vendor- and product-agnostic: it models generic DNS-SD discovery, and its configuration is a typed `Config` that a deployment maps its own names onto rather than one this package knows about. The record model and topic layout live in [`ebus-service-discovery`](https://github.com/electrification-bus/python-service-discovery); align changes to the wire contract there.
+
+## License
+
+[MIT License](LICENSE) — Copyright (c) 2026 Clark Communications Corporation

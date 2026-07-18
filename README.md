@@ -1,5 +1,11 @@
 # ebus-mdns-discovery
 
+[![PyPI version](https://img.shields.io/pypi/v/ebus-mdns-discovery.svg)](https://pypi.org/project/ebus-mdns-discovery/)
+[![Python versions](https://img.shields.io/pypi/pyversions/ebus-mdns-discovery.svg)](https://pypi.org/project/ebus-mdns-discovery/)
+[![Lint](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/lint.yml/badge.svg)](https://github.com/electrification-bus/python-mdns-discovery/actions/workflows/lint.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 `mdns-discovery` browses the local network for DNS-SD/mDNS services and publishes each one it finds as a **retained MQTT record** on the configured broker, so any service on the LAN can look up "what is on the network, and how do I reach it" by subscribing instead of browsing itself.
 
 It is the **browse-and-publish** side of discovery. The record model, its JSON Schema, the topic layout, tombstone/freshness semantics, a live-view `ServiceResolver`, and the `service-discovery` debug CLI all live in the companion library [`ebus-service-discovery`](https://github.com/electrification-bus/python-service-discovery) ([PyPI](https://pypi.org/project/ebus-service-discovery/)). That repo's README is the normative description of the wire contract; this package is only the publisher that produces those records.

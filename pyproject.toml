@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ebus-mdns-discovery"
+# Single source of truth: src/ebus_mdns_discovery/__init__.py's __version__
+# (read dynamically below, and by setup.py's legacy path). Bump it in ONE place;
+# a publish.yml guard fails the release if the git tag disagrees.
+dynamic = ["version"]
+description = "Browse the LAN for mDNS/DNS-SD services and publish each as a retained MQTT record on the eBus service-discovery bus (v1)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    {name = "Clark Communications Corporation"}
+]
+keywords = ["mdns", "dns-sd", "zeroconf", "avahi", "service-discovery", "mqtt", "iot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Networking",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "ebus-service-discovery>=0.3.1",
+    "ebus-mqtt-client>=0.1.7",
+]
+
+[project.optional-dependencies]
+# The avahi backend needs the D-Bus binding and the GLib main loop. Kept optional
+# (a Linux-with-avahi concern) so the base package installs on any platform; the
+# panel/image installs `ebus-mdns-discovery[avahi]`, or the meta layer lists the
+# system python3-dbus / python3-pygobject explicitly.
+avahi = ["dbus-python", "PyGObject<3.52"]
+# `tomli` backports tomllib for Python 3.10 (optional config-file support).
+dev = ["pytest", "ruff>=0.15.0", "tomli"]
+
+[project.scripts]
+mdns-discovery = "ebus_mdns_discovery.service:run"
+
+[project.urls]
+Homepage = "https://ebus.energy"
+Repository = "https://github.com/electrification-bus/python-mdns-discovery"
+Issues = "https://github.com/electrification-bus/python-mdns-discovery/issues"
+
+[tool.setuptools.dynamic]
+version = {attr = "ebus_mdns_discovery.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ebus_mdns_discovery = ["py.typed"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100
+target-version = "py310"
+extend-exclude = [".beads"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501", # line-too-long (handled by formatter)
+    "B008", # do not perform function calls in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # allow assert False in tests

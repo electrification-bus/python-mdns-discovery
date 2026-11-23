@@ -2,8 +2,8 @@
 
 The live D-Bus wiring is validated on a panel, but the pieces that stop avahi's
 per-client object pool from leaking are pure bookkeeping and are covered here
-with fake avahi objects (no live dbus): freeing an object also drops its signal
-receivers, the per-type ServiceBrowser is refcounted and freed only when the
+with fake avahi objects (no live dbus): freeing an object also stops dispatching
+its signals, the per-type ServiceBrowser is refcounted and freed only when the
 type is gone everywhere, and the concurrent resolver count is LRU-capped.
 """
 
@@ -22,32 +22,21 @@ class FakeObj:
         self.freed = True
 
 
-class FakeMatch:
-    def __init__(self):
-        self.removed = False
-
-    def remove(self):
-        self.removed = True
-
-
-def _tracked():
-    t = _Tracked(FakeObj())
-    t.matches = [FakeMatch(), FakeMatch()]
-    return t
+def _tracked(path="/Client1/Obj1"):
+    return _Tracked(FakeObj(), path)
 
 
 def _browser(**kw):
     return AvahiBrowser(on_active=lambda o: None, on_removed=lambda k: None, **kw)
 
 
-def test_free_tracked_releases_object_and_matches():
+def test_free_tracked_releases_object_and_forgets_its_path():
     b = _browser()
     t = _tracked()
-    matches = list(t.matches)
+    b._paths[t.path] = None
     b._free_tracked(t)
     assert t.obj.freed
-    assert all(m.removed for m in matches)
-    assert t.matches == []
+    assert b._paths == {}
 
 
 def test_free_tracked_none_is_noop():

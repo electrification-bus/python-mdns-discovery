@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The avahi D-Bus proxies no longer introspect. avahi logs several lines for each introspection of an object whose interface XML is not installed, once per discovered service.
-- Warnings that can fire once per discovered service (`resolverNewFailed`, `resolverWireFailed`, `serviceBrowserNewFailed`, `serviceBrowserWireFailed`, `discoveryCapReached`) are sampled: the first and every 100th are logged at WARNING with a running total, and all of them at DEBUG.
+- Warnings that can fire once per discovered service (`resolverNewFailed`, `serviceBrowserNewFailed`, `discoveryCapReached`) are sampled: the first and every 100th are logged at WARNING with a running total, and all of them at DEBUG.
 - A service announced with a one-label type (`_tcp`) is skipped. avahi refused to resolve it and logged each attempt.
+- avahi signals are received once per signal name instead of once per browser and resolver, so the number of D-Bus match rules no longer grows with the number of services. Past the system bus's per-connection limit, new services were not resolved (`resolverWireFailed`).
 
 ## [0.1.0] - 2026-07-18
 

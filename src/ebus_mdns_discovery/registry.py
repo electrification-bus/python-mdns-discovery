@@ -40,6 +40,7 @@ from ebus_service_discovery.record import (
     RecordState,
 )
 
+from ebus_mdns_discovery._sampled_log import SampledWarning
 from ebus_mdns_discovery.browser import Observation
 
 logger = logging.getLogger("mdns-discovery")
@@ -97,6 +98,7 @@ class Registry:
         # lazily discarded on pop.
         self._clear_heap: list[tuple[float, int, _ViewKey]] = []
         self._token = 0
+        self._warn_cap = SampledWarning(logger, "discoveryCapReached")
 
     # -- events (driven by the avahi browser) --------------------------------
 
@@ -108,7 +110,7 @@ class Registry:
             if not self._ensure_capacity():
                 # Genuine overflow: more live services than the cap allows. Drop
                 # this one rather than evict a present service. Raise MDNSD_MAX_RECORDS.
-                logger.warning("reason=discoveryCapReached,max=%s,dropped=%s", self._max, obs.key)
+                self._warn_cap("max=%s,dropped=%s", self._max, obs.key)
                 return
             record = self._build_record(obs, now)
             entry = Entry(record=record, first_seen=now, last_seen=now, phase=Phase.ACTIVE)

@@ -272,3 +272,12 @@ def test_reconcile_does_not_mutate_caller_records():
     r.mark_removed(("_x._tcp", "eth0", "A"))  # tombstones the adopted entry
     assert seed.state is RecordState.ACTIVE  # registry owns a private copy
     assert seed.removed_at is None
+
+
+def test_cap_warning_is_sampled(caplog):
+    clock, pub = Clock(), Pub()
+    r = _registry(pub, clock, max_records=1)
+    for i in range(150):
+        r.mark_active(_obs(instance=f"svc{i}"))
+    warnings = [m for m in caplog.messages if "discoveryCapReached" in m]
+    assert len(warnings) == 2

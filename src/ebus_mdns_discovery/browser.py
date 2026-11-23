@@ -30,6 +30,8 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
+from ebus_mdns_discovery._sampled_log import SampledWarning
+
 logger = logging.getLogger("mdns-discovery")
 
 # The D-Bus binding is a panel-only dependency; keep the module importable (and
@@ -218,16 +220,28 @@ class AvahiBrowser:
         self._resolvers: OrderedDict[tuple, _Tracked] = OrderedDict()
         self._iface_names: dict[int, str] = {}
         self._evicted = 0
+        self._warn_browser_new = SampledWarning(logger, "serviceBrowserNewFailed")
+        self._warn_browser_wire = SampledWarning(logger, "serviceBrowserWireFailed")
+        self._warn_resolver_new = SampledWarning(logger, "resolverNewFailed")
+        self._warn_resolver_wire = SampledWarning(logger, "resolverWireFailed")
+
+    def _proxy(self, path: str, interface: str) -> object:
+        """An interface proxy that does not introspect: avahi logs several lines for
+        each introspection of an object whose interface XML is not installed. Method
+        arguments must therefore carry their own D-Bus types."""
+        return dbus.Interface(
+            self._bus.get_object(AVAHI_DBUS_NAME, path, introspect=False), interface
+        )
 
     def start(self) -> None:
         if dbus is None:
             raise RuntimeError("dbus binding unavailable; AvahiBrowser requires a panel")
         self._bus = dbus.SystemBus()
-        self._server = dbus.Interface(self._bus.get_object(AVAHI_DBUS_NAME, "/"), _S_SERVER)
+        self._server = self._proxy("/", _S_SERVER)
         path = self._server.ServiceTypeBrowserNew(
             AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, "", dbus.UInt32(0)
         )
-        tb = dbus.Interface(self._bus.get_object(AVAHI_DBUS_NAME, path), _S_TYPE_BROWSER)
+        tb = self._proxy(path, _S_TYPE_BROWSER)
         self._type_browser = _Tracked(tb)
         self._type_browser.matches.append(tb.connect_to_signal("ItemNew", self._on_type_new))
         logger.info("reason=avahiBrowseStarted")
@@ -298,9 +312,9 @@ class AvahiBrowser:
                 AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, stype, "", dbus.UInt32(0)
             )
         except dbus.DBusException as e:
-            logger.warning("reason=serviceBrowserNewFailed,type=%s,error=%s", stype, e)
+            self._warn_browser_new("type=%s,error=%s", stype, e)
             return
-        browser = dbus.Interface(self._bus.get_object(AVAHI_DBUS_NAME, path), _S_BROWSER)
+        browser = self._proxy(path, _S_BROWSER)
         tracked = _Tracked(browser)
         try:
             tracked.matches.append(browser.connect_to_signal("ItemNew", self._on_service_new))
@@ -308,12 +322,17 @@ class AvahiBrowser:
         except Exception as e:
             # Wiring failed after ServiceBrowserNew created the avahi object; free
             # it (and any receiver attached so far) so it doesn't leak.
-            logger.warning("reason=serviceBrowserWireFailed,type=%s,error=%s", stype, e)
+            self._warn_browser_wire("type=%s,error=%s", stype, e)
             self._free_tracked(tracked)
             return
         self._service_browsers[stype] = tracked
 
     def _on_service_new(self, interface, protocol, name, stype, domain, flags) -> None:
+        # A service type has two labels ("_http._tcp"). A browse of the DNS-SD
+        # meta-type reports each type as a service named "_http" of type "_tcp",
+        # which avahi refuses to resolve and logs.
+        if "." not in stype:
+            return
         rkey = (int(interface), int(protocol), str(name), str(stype), str(domain))
         if rkey in self._resolvers:
             self._resolvers.move_to_end(rkey)  # mark recently seen for the LRU
@@ -337,9 +356,9 @@ class AvahiBrowser:
                 dbus.UInt32(0),
             )
         except dbus.DBusException as e:
-            logger.warning("reason=resolverNewFailed,name=%s,error=%s", name, e)
+            self._warn_resolver_new("type=%s,name=%s,error=%s", stype, name, e)
             return
-        resolver = dbus.Interface(self._bus.get_object(AVAHI_DBUS_NAME, path), _S_RESOLVER)
+        resolver = self._proxy(path, _S_RESOLVER)
         tracked = _Tracked(resolver)
         try:
             tracked.matches.append(resolver.connect_to_signal("Found", self._on_resolved))
@@ -351,7 +370,7 @@ class AvahiBrowser:
         except Exception as e:
             # Wiring failed after ServiceResolverNew created the avahi object; free
             # it (and any receiver attached so far) so it doesn't leak.
-            logger.warning("reason=resolverWireFailed,name=%s,error=%s", name, e)
+            self._warn_resolver_wire("type=%s,name=%s,error=%s", stype, name, e)
             self._free_tracked(tracked)
             return
         self._resolvers[rkey] = tracked

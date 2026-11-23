@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The avahi D-Bus proxies no longer introspect. avahi logs several lines for each introspection of an object whose interface XML is not installed, once per discovered service.
+- Warnings that can fire once per discovered service (`resolverNewFailed`, `resolverWireFailed`, `serviceBrowserNewFailed`, `serviceBrowserWireFailed`, `discoveryCapReached`) are sampled: the first and every 100th are logged at WARNING with a running total, and all of them at DEBUG.
+- A service announced with a one-label type (`_tcp`) is skipped. avahi refused to resolve it and logged each attempt.
+
 ## [0.1.0] - 2026-07-18
 
 ### Added

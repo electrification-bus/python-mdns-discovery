@@ -13,13 +13,17 @@ unit-tested; the D-Bus/GLib wiring is validated on a panel.
 avahi enforces an ``objects-per-client-max`` (default 1024) across ALL browsers
 and resolvers a single D-Bus client holds. Because this is one long-lived client,
 resolvers (created per instance x interface x protocol, the dominant consumer on
-a busy LAN) are LRU-capped, and every freed object also drops its D-Bus signal
-receivers. Per-type ServiceBrowsers are kept for the whole browse session (freed
+a busy LAN) are LRU-capped. Per-type ServiceBrowsers are kept for the whole browse session (freed
 only in ``stop()``): freeing one when its type goes away would make its instances'
 ``ItemRemove``s unobservable and orphan their records (the type PTR and the
 per-type PTR expire on independent TTLs, so the type removal can race ahead of the
 instances'), and browsers are bounded by the number of distinct service types
 (small) regardless.
+
+Signals are received once per signal name for all browsers and resolvers, and
+dispatched on the sender's object path. A receiver per object would cost four match
+rules each (dbus-python adds two name-owner rules of its own), and the system bus
+allows a limited number per connection.
 """
 
 from __future__ import annotations
@@ -67,16 +71,13 @@ DEFAULT_RESOLVER_EVICT_LOG_EVERY = 100
 
 
 class _Tracked:
-    """An avahi D-Bus object (a browser or resolver) plus its signal receivers,
-    so freeing it releases BOTH the avahi object (``Free()``) and the client-side
-    D-Bus SignalMatch receivers (which otherwise leak on the process-singleton
-    bus)."""
+    """An avahi D-Bus object (a browser or resolver) and its object path."""
 
-    __slots__ = ("obj", "matches")
+    __slots__ = ("obj", "path")
 
-    def __init__(self, obj: object) -> None:
+    def __init__(self, obj: object, path: str) -> None:
         self.obj = obj
-        self.matches: list = []
+        self.path = path
 
 
 @dataclass
@@ -218,12 +219,14 @@ class AvahiBrowser:
         self._service_browsers: dict[str, _Tracked] = {}
         # rkey -> _Tracked(ServiceResolver), in LRU order (front = stalest).
         self._resolvers: OrderedDict[tuple, _Tracked] = OrderedDict()
+        # Object path -> resolver key (None for a browser), for every live object.
+        # A signal from any other path is from an object already freed.
+        self._paths: dict[str, tuple | None] = {}
+        self._receivers: list = []
         self._iface_names: dict[int, str] = {}
         self._evicted = 0
         self._warn_browser_new = SampledWarning(logger, "serviceBrowserNewFailed")
-        self._warn_browser_wire = SampledWarning(logger, "serviceBrowserWireFailed")
         self._warn_resolver_new = SampledWarning(logger, "resolverNewFailed")
-        self._warn_resolver_wire = SampledWarning(logger, "resolverWireFailed")
 
     def _proxy(self, path: str, interface: str) -> object:
         """An interface proxy that does not introspect: avahi logs several lines for
@@ -237,20 +240,20 @@ class AvahiBrowser:
         if dbus is None:
             raise RuntimeError("dbus binding unavailable; AvahiBrowser requires a panel")
         self._bus = dbus.SystemBus()
+        self._remove_receivers()
+        self._add_receivers()
         self._server = self._proxy("/", _S_SERVER)
         path = self._server.ServiceTypeBrowserNew(
             AVAHI_IF_UNSPEC, AVAHI_PROTO_UNSPEC, "", dbus.UInt32(0)
         )
-        tb = self._proxy(path, _S_TYPE_BROWSER)
-        self._type_browser = _Tracked(tb)
-        self._type_browser.matches.append(tb.connect_to_signal("ItemNew", self._on_type_new))
+        self._type_browser = self._track(path, _S_TYPE_BROWSER)
         logger.info("reason=avahiBrowseStarted")
 
     def stop(self) -> None:
-        """Free every browser/resolver (avahi object + its signal receivers) and
-        reset. Safe to call before start(). The bus is a process singleton, so
-        leaked SignalMatch receivers would otherwise accumulate on every avahi
-        restart."""
+        """Remove the signal receivers, free every browser/resolver and reset. Safe
+        to call before start(). The bus is a process singleton, so receivers left
+        behind would accumulate on every avahi restart."""
+        self._remove_receivers()
         for tracked in list(self._resolvers.values()):
             self._free_tracked(tracked)
         for tracked in list(self._service_browsers.values()):
@@ -258,6 +261,7 @@ class AvahiBrowser:
         self._free_tracked(self._type_browser)
         self._resolvers.clear()
         self._service_browsers.clear()
+        self._paths.clear()
         self._type_browser = None
         self._server = None
         self._tracker.clear()
@@ -277,14 +281,53 @@ class AvahiBrowser:
 
     # -- object lifecycle helpers -------------------------------------------
 
+    def _add_receivers(self) -> None:
+        for interface, signal, handler in (
+            (_S_TYPE_BROWSER, "ItemNew", self._on_type_new),
+            (_S_BROWSER, "ItemNew", self._on_service_new),
+            (_S_BROWSER, "ItemRemove", self._on_service_remove),
+            (_S_RESOLVER, "Found", self._on_resolved),
+            (_S_RESOLVER, "Failure", self._on_resolve_failure),
+        ):
+            self._receivers.append(
+                self._bus.add_signal_receiver(
+                    self._dispatcher(signal, handler),
+                    signal_name=signal,
+                    dbus_interface=interface,
+                    bus_name=AVAHI_DBUS_NAME,
+                    path_keyword="path",
+                )
+            )
+
+    def _remove_receivers(self) -> None:
+        for receiver in self._receivers:
+            with contextlib.suppress(Exception):
+                receiver.remove()
+        self._receivers.clear()
+
+    def _dispatcher(self, signal: str, handler: Callable) -> Callable:
+        def on_signal(*args, path):
+            path = str(path)
+            if path not in self._paths:
+                return
+            if signal == "Failure":
+                handler(self._paths[path], *args)
+            else:
+                handler(*args)
+
+        return on_signal
+
+    def _track(self, path: object, interface: str, rkey: tuple | None = None) -> _Tracked:
+        path = str(path)
+        tracked = _Tracked(self._proxy(path, interface), path)
+        self._paths[path] = rkey
+        return tracked
+
     def _free_tracked(self, tracked: _Tracked | None) -> None:
-        """Release an avahi object and its D-Bus signal receivers."""
+        """Release an avahi object and stop dispatching its signals."""
         if tracked is None:
             return
-        for match in tracked.matches:
-            with contextlib.suppress(Exception):
-                match.remove()
-        tracked.matches.clear()
+        self._paths.pop(tracked.path, None)
         _free(tracked.obj)
 
     def _evict_if_full(self) -> None:
@@ -314,18 +357,7 @@ class AvahiBrowser:
         except dbus.DBusException as e:
             self._warn_browser_new("type=%s,error=%s", stype, e)
             return
-        browser = self._proxy(path, _S_BROWSER)
-        tracked = _Tracked(browser)
-        try:
-            tracked.matches.append(browser.connect_to_signal("ItemNew", self._on_service_new))
-            tracked.matches.append(browser.connect_to_signal("ItemRemove", self._on_service_remove))
-        except Exception as e:
-            # Wiring failed after ServiceBrowserNew created the avahi object; free
-            # it (and any receiver attached so far) so it doesn't leak.
-            self._warn_browser_wire("type=%s,error=%s", stype, e)
-            self._free_tracked(tracked)
-            return
-        self._service_browsers[stype] = tracked
+        self._service_browsers[stype] = self._track(path, _S_BROWSER)
 
     def _on_service_new(self, interface, protocol, name, stype, domain, flags) -> None:
         # A service type has two labels ("_http._tcp"). A browse of the DNS-SD
@@ -358,22 +390,7 @@ class AvahiBrowser:
         except dbus.DBusException as e:
             self._warn_resolver_new("type=%s,name=%s,error=%s", stype, name, e)
             return
-        resolver = self._proxy(path, _S_RESOLVER)
-        tracked = _Tracked(resolver)
-        try:
-            tracked.matches.append(resolver.connect_to_signal("Found", self._on_resolved))
-            tracked.matches.append(
-                resolver.connect_to_signal(
-                    "Failure", lambda err, rk=rkey: self._on_resolve_failure(rk, err)
-                )
-            )
-        except Exception as e:
-            # Wiring failed after ServiceResolverNew created the avahi object; free
-            # it (and any receiver attached so far) so it doesn't leak.
-            self._warn_resolver_wire("type=%s,name=%s,error=%s", stype, name, e)
-            self._free_tracked(tracked)
-            return
-        self._resolvers[rkey] = tracked
+        self._resolvers[rkey] = self._track(path, _S_RESOLVER, rkey)
 
     def _on_resolve_failure(self, rkey, err) -> None:
         # Free the resolver so a never-resolving instance doesn't pin an avahi

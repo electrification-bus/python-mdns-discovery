@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 ### Changed
 
 - The avahi D-Bus proxies no longer introspect. avahi logs several lines for each introspection of an object whose interface XML is not installed, once per discovered service.

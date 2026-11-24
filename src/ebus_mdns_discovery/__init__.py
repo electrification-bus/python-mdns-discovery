@@ -8,6 +8,6 @@ library; this package is only the publisher.
 
 from ebus_mdns_discovery.config import Config, load
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = ["Config", "load", "__version__"]
